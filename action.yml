@@ -1,0 +1,46 @@
+name: "PR Guardrail"
+description: "Gates PRs that touch risky files or run shell commands behind an explicit human review — not a detector of AI authorship."
+author: "Vora"
+branding:
+  icon: "shield"
+  color: "purple"
+
+inputs:
+  bot-allowlist:
+    description: >
+      Comma-separated list of author logins excluded from analysis entirely
+      (in addition to the built-in defaults: dependabot[bot], renovate[bot],
+      github-actions[bot]).
+    required: false
+    default: ""
+  risky-file-patterns:
+    description: >
+      Comma-separated list of additional glob patterns treated as high-risk
+      files, appended to the built-in list (migrations, IaC, permission and
+      secret configs).
+    required: false
+    default: ""
+  volume-threshold:
+    description: >
+      Maximum lines changed within `time-window` before the volume-anomaly
+      signal fires. Must be a positive integer. Only blocks the PR when
+      combined with the co-authored-by-agent signal.
+    required: false
+    default: "300"
+  time-window:
+    description: >
+      Time window in minutes used to evaluate commit velocity for the
+      volume-anomaly signal. Must be a positive integer.
+    required: false
+    default: "10"
+  mode:
+    description: >
+      "block" fails the check run when a blocking signal fires. "warn"
+      reports signals in the PR comment but always reports success, useful
+      for dogfooding before enforcing.
+    required: false
+    default: "block"
+
+runs:
+  using: "node20"
+  main: "dist/index.js"

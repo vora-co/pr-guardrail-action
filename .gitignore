@@ -1,0 +1,7 @@
+node_modules/
+*.log
+.DS_Store
+coverage/
+
+# Brief interno — no se publica en el repo
+Brief_PR_Guardrail_Action_Sesion_Code.md
