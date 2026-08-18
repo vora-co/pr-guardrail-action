@@ -6,6 +6,13 @@ branding:
   color: "purple"
 
 inputs:
+  github-token:
+    description: >
+      Token used to read PR files/commits/reviews and post the check run and
+      comment. Defaults to the workflow's own GITHUB_TOKEN — you shouldn't
+      need to set this.
+    required: false
+    default: ${{ github.token }}
   bot-allowlist:
     description: >
       Comma-separated list of author logins excluded from analysis entirely
