@@ -30380,6 +30380,89 @@ function decide(signals, mode, hasHumanApproval, gateVia = hasHumanApproval ? "h
 
 /***/ }),
 
+/***/ 3056:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.detectRequiredStatusCheck = detectRequiredStatusCheck;
+exports.requiredStatusCheckNotice = requiredStatusCheckNotice;
+const core = __importStar(__nccwpck_require__(7484));
+/**
+ * Best-effort, read-only probe of branch protection. A private repo on
+ * GitHub Free doesn't have this feature at all and the API responds with a
+ * 403/404 — that's an expected, common case, not an error, so it must never
+ * throw or crash the run. Any other unexpected failure is also treated as
+ * "unknown" rather than risking a crash over a purely informational check.
+ */
+async function detectRequiredStatusCheck(octokit, repoRef, branch, checkName) {
+    try {
+        const { data } = await octokit.rest.repos.getStatusChecksProtection({
+            ...repoRef,
+            branch,
+        });
+        const contexts = data.contexts ?? [];
+        const checks = (data.checks ?? []).map((check) => check.context);
+        const isRequired = contexts.includes(checkName) || checks.includes(checkName);
+        return isRequired ? "required" : "not-required";
+    }
+    catch (error) {
+        const status = error.status;
+        if (status !== 403 && status !== 404) {
+            core.warning(`Could not determine whether "${checkName}" is a required status check: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        return "unknown";
+    }
+}
+function requiredStatusCheckNotice(state, checkName) {
+    if (state === "required")
+        return null;
+    if (state === "not-required") {
+        return (`ℹ️ This check ("${checkName}") is not configured as a required status check on this branch — ` +
+            "it will not block the merge. See the README to enable real enforcement.");
+    }
+    return (`ℹ️ Could not confirm whether "${checkName}" is required on this branch — branch protection may not ` +
+        "be available on this plan or repo visibility (e.g. a private repo on GitHub Free). Merges won't be " +
+        "blocked unless a required status check is configured. See the README.");
+}
+
+
+/***/ }),
+
 /***/ 2246:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -30407,7 +30490,7 @@ function renderSignal(signal, isBlocking) {
     }
     return lines.join("\n");
 }
-function buildComment(decision, mode) {
+function buildComment(decision, mode, requiredStatusCheckNotice) {
     const { signals, blockingSignals, shouldBlock, hasHumanApproval, gateVia, gateDetail, conclusion } = decision;
     const blockingSet = new Set(blockingSignals);
     const lines = ["## PR Guardrail report", ""];
@@ -30438,6 +30521,10 @@ function buildComment(decision, mode) {
     }
     lines.push("");
     lines.push(`Check conclusion: **${conclusion}** (mode: \`${mode}\`)`);
+    if (requiredStatusCheckNotice) {
+        lines.push("");
+        lines.push(requiredStatusCheckNotice);
+    }
     return lines.join("\n");
 }
 
@@ -30808,6 +30895,7 @@ async function run() {
             repoRef: { owner: context.repo.owner, repo: context.repo.repo },
             pullNumber: pullRequest.number,
             headSha: pullRequest.head.sha,
+            baseBranch: pullRequest.base.ref,
             authorLogin: pullRequest.user?.login ?? "",
             config,
         });
@@ -30881,6 +30969,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.runGuardrail = runGuardrail;
 const core = __importStar(__nccwpck_require__(7484));
 const blocking_1 = __nccwpck_require__(6632);
+const branchProtection_1 = __nccwpck_require__(3056);
 const comment_1 = __nccwpck_require__(2246);
 const github_1 = __nccwpck_require__(9248);
 const humanGate_1 = __nccwpck_require__(4741);
@@ -30890,16 +30979,17 @@ const shellCommand_1 = __nccwpck_require__(2974);
 const volumeAnomaly_1 = __nccwpck_require__(8546);
 const soloMaintainer_1 = __nccwpck_require__(6010);
 async function runGuardrail(input) {
-    const { octokit, repoRef, pullNumber, headSha, authorLogin, config } = input;
+    const { octokit, repoRef, pullNumber, headSha, baseBranch, authorLogin, config } = input;
     if ((0, humanGate_1.isAllowlistedBot)(authorLogin, config.botAllowlist)) {
         core.info(`Author "${authorLogin}" is on the bot allowlist — skipping analysis.`);
         return { outcome: "skipped-bot" };
     }
     const checkRunId = await (0, github_1.createCheckRun)(octokit, repoRef, headSha);
-    const [files, commits, reviews] = await Promise.all([
+    const [files, commits, reviews, requiredCheckState] = await Promise.all([
         (0, github_1.fetchPullFiles)(octokit, repoRef, pullNumber),
         (0, github_1.fetchPullCommits)(octokit, repoRef, pullNumber),
         (0, github_1.fetchPullReviews)(octokit, repoRef, pullNumber),
+        (0, branchProtection_1.detectRequiredStatusCheck)(octokit, repoRef, baseBranch, github_1.CHECK_RUN_NAME),
     ]);
     if (commits.length === 0) {
         core.warning("No commits found on this PR yet — GitHub may not have finished syncing them. " +
@@ -30943,7 +31033,8 @@ async function runGuardrail(input) {
         }
     }
     const decision = (0, blocking_1.decide)(signals, config.mode, hasHumanApproval, gateVia, gateDetail);
-    const comment = (0, comment_1.buildComment)(decision, config.mode);
+    const notice = (0, branchProtection_1.requiredStatusCheckNotice)(requiredCheckState, github_1.CHECK_RUN_NAME);
+    const comment = (0, comment_1.buildComment)(decision, config.mode, notice);
     try {
         await (0, github_1.upsertGuardrailComment)(octokit, repoRef, pullNumber, comment);
     }

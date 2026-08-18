@@ -25,7 +25,11 @@ function renderSignal(signal: SignalResult, isBlocking: boolean): string {
   return lines.join("\n");
 }
 
-export function buildComment(decision: GuardrailDecision, mode: Mode): string {
+export function buildComment(
+  decision: GuardrailDecision,
+  mode: Mode,
+  requiredStatusCheckNotice?: string | null
+): string {
   const { signals, blockingSignals, shouldBlock, hasHumanApproval, gateVia, gateDetail, conclusion } =
     decision;
   const blockingSet = new Set(blockingSignals);
@@ -67,6 +71,11 @@ export function buildComment(decision: GuardrailDecision, mode: Mode): string {
 
   lines.push("");
   lines.push(`Check conclusion: **${conclusion}** (mode: \`${mode}\`)`);
+
+  if (requiredStatusCheckNotice) {
+    lines.push("");
+    lines.push(requiredStatusCheckNotice);
+  }
 
   return lines.join("\n");
 }

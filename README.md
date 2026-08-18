@@ -80,6 +80,22 @@ See [`examples/basic.yml`](examples/basic.yml).
 
 The Action runs and reports on every PR regardless of your branch protection settings — that's on purpose, so you get visibility even before you enforce anything. But **without a required status check, nothing actually blocks a merge.** After your first run, go to your repository's branch protection rules and add **`vora-guardrail`** as a required status check on your target branch. Until you do that, PR Guardrail is observability, not enforcement.
 
+## Does this actually block anything?
+
+That depends on your GitHub plan and your repo's visibility — required status checks aren't available everywhere:
+
+| Repo | Required status checks | Result |
+|---|---|---|
+| Public (any plan, including Free) | ✅ Available | Configure `vora-guardrail` as required and `mode: block` actually blocks the merge. |
+| Private on GitHub Free | ❌ Not available | **`mode: block` blocks nothing at GitHub's level.** The check still runs and turns red on a blocking signal — that's useful as a visual/audit signal in the PR — but there is no mechanism to stop the merge button. |
+| Private on Team, Enterprise, or Pro | ✅ Available | Same as public: configure `vora-guardrail` as required for real enforcement. |
+
+If you're a solo maintainer on a private Free-tier repo, PR Guardrail is currently an observability tool for you, not a hard gate — pair it with [solo-maintainer mode](#solo-maintainer-mode) so at least the report reflects a deliberate acknowledgment rather than silence, and know that the "blocked" state is a signal for you to notice, not something GitHub will enforce on your behalf.
+
+The Action also checks this for you at runtime: on every run, it does a best-effort lookup of whether `vora-guardrail` is currently configured as a required status check on the PR's target branch (tolerating the 403/404 a plan without this feature returns, without failing the run). If it isn't — or if this can't be determined at all — the check summary and PR comment say so directly:
+
+> ℹ️ This check ("vora-guardrail") is not configured as a required status check on this branch — it will not block the merge. See the README to enable real enforcement.
+
 ## Configuration
 
 All inputs are optional with reasonable defaults.
@@ -111,7 +127,7 @@ Try it in `warn` mode first:
 - **Binary or large files** — excluded from text-pattern analysis; GitHub omits the diff patch for them, and this Action skips files it can't read as text.
 - **External fork PRs with a read-only token** — check-run creation and PR commenting fail gracefully (a warning in the logs) instead of crashing the whole run.
 - **Invalid threshold config** (zero or negative) — fails fast with a clear log message rather than gating on an undefined calculation.
-- **No branch protection configured** — the check still runs and reports for visibility; see the warning above.
+- **No branch protection, or a plan that doesn't support it (e.g. private + Free)** — the check still runs and reports for visibility; the runtime notice and [Does this actually block anything?](#does-this-actually-block-anything) explain exactly what that does and doesn't mean for enforcement.
 
 ## Why this exists
 

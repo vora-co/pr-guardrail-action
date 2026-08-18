@@ -61,6 +61,18 @@ describe("buildComment", () => {
     expect(comment).toContain("review-bot");
   });
 
+  it("appends the required-status-check notice when one is passed", () => {
+    const decision = decide(clean, "block", false);
+    const comment = buildComment(decision, "block", 'ℹ️ This check ("vora-guardrail") is not configured as a required status check.');
+    expect(comment).toContain("not configured as a required status check");
+  });
+
+  it("omits any notice section when none is passed", () => {
+    const decision = decide(clean, "block", false);
+    const comment = buildComment(decision, "block", null);
+    expect(comment).not.toContain("ℹ️ This check");
+  });
+
   it("marks co-authored-by-agent as informational, not blocking, even when detected", () => {
     const signals = [
       signal("co-authored-by-agent", true, ["abc123: Co-authored-by: Claude <noreply@anthropic.com>"]),

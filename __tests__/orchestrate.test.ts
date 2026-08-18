@@ -23,6 +23,7 @@ function makeOctokit(overrides: {
   comments?: any[];
   createCheckShouldFail?: boolean;
   commentShouldFail?: boolean;
+  requiredStatusCheckState?: "required" | "not-required" | "unknown";
 }) {
   const {
     files = [],
@@ -31,7 +32,16 @@ function makeOctokit(overrides: {
     comments = [],
     createCheckShouldFail = false,
     commentShouldFail = false,
+    requiredStatusCheckState = "required",
   } = overrides;
+
+  const getStatusChecksProtection = jest.fn().mockImplementation(() => {
+    if (requiredStatusCheckState === "unknown") return Promise.reject({ status: 404 });
+    if (requiredStatusCheckState === "not-required") {
+      return Promise.resolve({ data: { contexts: ["some-other-check"], checks: [] } });
+    }
+    return Promise.resolve({ data: { contexts: ["vora-guardrail"], checks: [] } });
+  });
 
   const updateComment = jest.fn().mockResolvedValue({});
   const createComment = jest.fn().mockImplementation(() => {
@@ -70,6 +80,9 @@ function makeOctokit(overrides: {
         create: checksCreate,
         update: checksUpdate,
       },
+      repos: {
+        getStatusChecksProtection,
+      },
     },
   };
 
@@ -86,6 +99,7 @@ describe("runGuardrail", () => {
       repoRef,
       pullNumber: 1,
       headSha: "sha",
+      baseBranch: "main",
       authorLogin: "dependabot[bot]",
       config: baseConfig(),
     });
@@ -100,6 +114,7 @@ describe("runGuardrail", () => {
       repoRef,
       pullNumber: 1,
       headSha: "sha",
+      baseBranch: "main",
       authorLogin: "alice",
       config: baseConfig(),
     });
@@ -118,6 +133,7 @@ describe("runGuardrail", () => {
       repoRef,
       pullNumber: 1,
       headSha: "sha",
+      baseBranch: "main",
       authorLogin: "alice",
       config: baseConfig(),
     });
@@ -142,6 +158,7 @@ describe("runGuardrail", () => {
       repoRef,
       pullNumber: 1,
       headSha: "sha",
+      baseBranch: "main",
       authorLogin: "alice",
       config: baseConfig(),
     });
@@ -161,6 +178,7 @@ describe("runGuardrail", () => {
       repoRef,
       pullNumber: 1,
       headSha: "sha",
+      baseBranch: "main",
       authorLogin: "alice",
       config: baseConfig(),
     });
@@ -186,6 +204,7 @@ describe("runGuardrail", () => {
       repoRef,
       pullNumber: 1,
       headSha: "sha",
+      baseBranch: "main",
       authorLogin: "alice",
       config: baseConfig({ soloMaintainerMode: "off" }),
     });
@@ -214,6 +233,7 @@ describe("runGuardrail", () => {
       repoRef,
       pullNumber: 1,
       headSha: "sha",
+      baseBranch: "main",
       authorLogin: "alice",
       config: baseConfig({ soloMaintainerMode: "self-ack" }),
     });
@@ -242,6 +262,7 @@ describe("runGuardrail", () => {
       repoRef,
       pullNumber: 1,
       headSha: "sha",
+      baseBranch: "main",
       authorLogin: "alice",
       config: baseConfig({ soloMaintainerMode: "self-ack" }),
     });
@@ -263,6 +284,7 @@ describe("runGuardrail", () => {
       repoRef,
       pullNumber: 1,
       headSha: "sha",
+      baseBranch: "main",
       authorLogin: "alice",
       config: baseConfig({ soloMaintainerMode: "second-agent", trustedReviewerAgents: ["review-bot"] }),
     });
@@ -284,6 +306,7 @@ describe("runGuardrail", () => {
       repoRef,
       pullNumber: 1,
       headSha: "sha",
+      baseBranch: "main",
       authorLogin: "alice",
       config: baseConfig({ soloMaintainerMode: "second-agent", trustedReviewerAgents: [] }),
     });
@@ -292,6 +315,69 @@ describe("runGuardrail", () => {
       expect(result.decision.conclusion).toBe("failure");
       expect(result.decision.gateVia).toBe("none");
     }
+  });
+
+  it("includes a not-required notice in the comment when the check isn't a required status check", async () => {
+    const { octokit, createComment } = makeOctokit({
+      files: [],
+      commits: [{ sha: "a", commit: { message: "msg", author: { date: "2026-08-11T10:00:00Z" } } }],
+      reviews: [],
+      requiredStatusCheckState: "not-required",
+    });
+    await runGuardrail({
+      octokit,
+      repoRef,
+      pullNumber: 1,
+      headSha: "sha",
+      baseBranch: "main",
+      authorLogin: "alice",
+      config: baseConfig(),
+    });
+    expect(createComment).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining("not configured as a required status check") })
+    );
+  });
+
+  it("includes an unknown-plan notice in the comment when branch protection can't be determined (404/403)", async () => {
+    const { octokit, createComment } = makeOctokit({
+      files: [],
+      commits: [{ sha: "a", commit: { message: "msg", author: { date: "2026-08-11T10:00:00Z" } } }],
+      reviews: [],
+      requiredStatusCheckState: "unknown",
+    });
+    await runGuardrail({
+      octokit,
+      repoRef,
+      pullNumber: 1,
+      headSha: "sha",
+      baseBranch: "main",
+      authorLogin: "alice",
+      config: baseConfig(),
+    });
+    expect(createComment).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.stringContaining("Could not confirm") })
+    );
+  });
+
+  it("omits the notice from the comment when the check is already required", async () => {
+    const { octokit, createComment } = makeOctokit({
+      files: [],
+      commits: [{ sha: "a", commit: { message: "msg", author: { date: "2026-08-11T10:00:00Z" } } }],
+      reviews: [],
+      requiredStatusCheckState: "required",
+    });
+    await runGuardrail({
+      octokit,
+      repoRef,
+      pullNumber: 1,
+      headSha: "sha",
+      baseBranch: "main",
+      authorLogin: "alice",
+      config: baseConfig(),
+    });
+    expect(createComment).toHaveBeenCalledWith(
+      expect.objectContaining({ body: expect.not.stringContaining("Could not confirm") })
+    );
   });
 
   it("succeeds when a blocking signal fires but a non-author reviewer approved", async () => {
@@ -305,6 +391,7 @@ describe("runGuardrail", () => {
       repoRef,
       pullNumber: 1,
       headSha: "sha",
+      baseBranch: "main",
       authorLogin: "alice",
       config: baseConfig(),
     });

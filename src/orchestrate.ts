@@ -1,8 +1,10 @@
 import * as core from "@actions/core";
 import { GateVia, GuardrailDecision, decide } from "./blocking";
+import { detectRequiredStatusCheck, requiredStatusCheckNotice } from "./branchProtection";
 import { buildComment } from "./comment";
 import { GuardrailConfig } from "./config";
 import {
+  CHECK_RUN_NAME,
   Octokit,
   RepoRef,
   completeCheckRun,
@@ -26,6 +28,7 @@ export interface OrchestrateInput {
   repoRef: RepoRef;
   pullNumber: number;
   headSha: string;
+  baseBranch: string;
   authorLogin: string;
   config: GuardrailConfig;
 }
@@ -36,7 +39,7 @@ export type OrchestrateResult =
   | { outcome: "evaluated"; decision: GuardrailDecision };
 
 export async function runGuardrail(input: OrchestrateInput): Promise<OrchestrateResult> {
-  const { octokit, repoRef, pullNumber, headSha, authorLogin, config } = input;
+  const { octokit, repoRef, pullNumber, headSha, baseBranch, authorLogin, config } = input;
 
   if (isAllowlistedBot(authorLogin, config.botAllowlist)) {
     core.info(`Author "${authorLogin}" is on the bot allowlist — skipping analysis.`);
@@ -45,10 +48,11 @@ export async function runGuardrail(input: OrchestrateInput): Promise<Orchestrate
 
   const checkRunId = await createCheckRun(octokit, repoRef, headSha);
 
-  const [files, commits, reviews] = await Promise.all([
+  const [files, commits, reviews, requiredCheckState] = await Promise.all([
     fetchPullFiles(octokit, repoRef, pullNumber),
     fetchPullCommits(octokit, repoRef, pullNumber),
     fetchPullReviews(octokit, repoRef, pullNumber),
+    detectRequiredStatusCheck(octokit, repoRef, baseBranch, CHECK_RUN_NAME),
   ]);
 
   if (commits.length === 0) {
@@ -108,7 +112,8 @@ export async function runGuardrail(input: OrchestrateInput): Promise<Orchestrate
   }
 
   const decision = decide(signals, config.mode, hasHumanApproval, gateVia, gateDetail);
-  const comment = buildComment(decision, config.mode);
+  const notice = requiredStatusCheckNotice(requiredCheckState, CHECK_RUN_NAME);
+  const comment = buildComment(decision, config.mode, notice);
 
   try {
     await upsertGuardrailComment(octokit, repoRef, pullNumber, comment);

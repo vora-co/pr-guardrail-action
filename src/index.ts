@@ -21,6 +21,7 @@ async function run(): Promise<void> {
       repoRef: { owner: context.repo.owner, repo: context.repo.repo },
       pullNumber: pullRequest.number,
       headSha: pullRequest.head.sha,
+      baseBranch: pullRequest.base.ref,
       authorLogin: pullRequest.user?.login ?? "",
       config,
     });
