@@ -47,6 +47,42 @@ inputs:
       for dogfooding before enforcing.
     required: false
     default: "block"
+  solo-maintainer-mode:
+    description: >
+      Off by default — the human gate behaves exactly as documented above.
+      "self-ack" additionally lets the PR author satisfy the gate with an
+      explicit `/guardrail-ack: <reason>` comment (not GitHub's native
+      Approve, which still never counts from the author) after a cooldown
+      since their last push. "second-agent" REPLACES the normal "any
+      non-author approval counts" check with a stricter one: only an
+      approving review from a login listed in `trusted-reviewer-agents`
+      satisfies the gate — any other reviewer's approval, allowlisted or
+      not, no longer counts on its own while this mode is active. Neither
+      mode is presented as independent human review in the report.
+    required: false
+    default: "off"
+  self-ack-min-length:
+    description: >
+      Minimum character length of the justification in a
+      `/guardrail-ack: <reason>` comment for it to count. Rejects empty or
+      one-word acks. Only relevant when solo-maintainer-mode is "self-ack".
+    required: false
+    default: "20"
+  self-ack-cooldown-minutes:
+    description: >
+      Minimum minutes required between the PR's last commit and a
+      `/guardrail-ack` comment for it to count — an ack posted in the same
+      minute as the push doesn't count. Only relevant when
+      solo-maintainer-mode is "self-ack".
+    required: false
+    default: "15"
+  trusted-reviewer-agents:
+    description: >
+      Comma-separated list of GitHub logins explicitly trusted as a second
+      reviewing agent. Never autodetected — must be configured by the repo
+      owner. Only relevant when solo-maintainer-mode is "second-agent".
+    required: false
+    default: ""
 
 runs:
   using: "node20"

@@ -1,5 +1,5 @@
 import * as core from "@actions/core";
-import { GuardrailDecision, decide } from "./blocking";
+import { GateVia, GuardrailDecision, decide } from "./blocking";
 import { buildComment } from "./comment";
 import { GuardrailConfig } from "./config";
 import {
@@ -7,6 +7,7 @@ import {
   RepoRef,
   completeCheckRun,
   createCheckRun,
+  fetchIssueComments,
   fetchPullCommits,
   fetchPullFiles,
   fetchPullReviews,
@@ -17,6 +18,7 @@ import { detectCoAuthoredByAgent } from "./signals/coAuthoredByAgent";
 import { detectRiskyFile } from "./signals/riskyFile";
 import { detectShellCommand } from "./signals/shellCommand";
 import { detectVolumeAnomaly } from "./signals/volumeAnomaly";
+import { evaluateSecondAgent, evaluateSelfAck } from "./soloMaintainer";
 import { SignalResult } from "./types";
 
 export interface OrchestrateInput {
@@ -64,8 +66,48 @@ export async function runGuardrail(input: OrchestrateInput): Promise<Orchestrate
     detectVolumeAnomaly(files, commits, config.volumeThreshold, config.timeWindowMinutes),
   ];
 
-  const hasHumanApproval = hasValidHumanApproval(authorLogin, reviews);
-  const decision = decide(signals, config.mode, hasHumanApproval);
+  let hasHumanApproval: boolean;
+  let gateVia: GateVia;
+  let gateDetail: string | undefined;
+
+  if (config.soloMaintainerMode === "second-agent") {
+    // Second-agent mode REPLACES the native "any non-author approval counts"
+    // check rather than adding to it: that native check would otherwise let
+    // ANY reviewer — allowlisted or not — satisfy the gate, making the
+    // allowlist meaningless and defeating the "not trivially forgeable with
+    // a second bot token" requirement. With this mode on, only an approval
+    // from a login explicitly in trusted-reviewer-agents counts.
+    const result = evaluateSecondAgent(authorLogin, reviews, config.trustedReviewerAgents);
+    hasHumanApproval = result.satisfied;
+    gateVia = result.satisfied ? "second-agent" : "none";
+    gateDetail = result.detail;
+  } else {
+    const hasNativeApproval = hasValidHumanApproval(authorLogin, reviews);
+    hasHumanApproval = hasNativeApproval;
+    gateVia = hasNativeApproval ? "human-review" : "none";
+
+    if (!hasHumanApproval && config.soloMaintainerMode === "self-ack") {
+      const comments = await fetchIssueComments(octokit, repoRef, pullNumber);
+      const lastPushAt = commits.reduce(
+        (latest, commit) => (commit.authorDate > latest ? commit.authorDate : latest),
+        commits[0].authorDate
+      );
+      const result = evaluateSelfAck(
+        authorLogin,
+        comments,
+        lastPushAt,
+        config.selfAckMinLength,
+        config.selfAckCooldownMinutes
+      );
+      if (result.satisfied) {
+        hasHumanApproval = true;
+        gateVia = "self-ack";
+        gateDetail = result.detail;
+      }
+    }
+  }
+
+  const decision = decide(signals, config.mode, hasHumanApproval, gateVia, gateDetail);
   const comment = buildComment(decision, config.mode);
 
   try {

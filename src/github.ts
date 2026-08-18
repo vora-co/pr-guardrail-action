@@ -70,6 +70,32 @@ export async function fetchPullReviews(
     }));
 }
 
+export interface IssueCommentData {
+  authorLogin: string;
+  body: string;
+  createdAt: string;
+}
+
+export async function fetchIssueComments(
+  octokit: Octokit,
+  repoRef: RepoRef,
+  pullNumber: number
+): Promise<IssueCommentData[]> {
+  const comments = await octokit.paginate(octokit.rest.issues.listComments, {
+    ...repoRef,
+    issue_number: pullNumber,
+    per_page: 100,
+  });
+
+  return comments
+    .filter((comment) => comment.user)
+    .map((comment) => ({
+      authorLogin: comment.user!.login,
+      body: comment.body ?? "",
+      createdAt: comment.created_at,
+    }));
+}
+
 export const CHECK_RUN_NAME = "vora-guardrail";
 
 /**

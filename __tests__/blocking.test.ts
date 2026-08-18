@@ -99,4 +99,18 @@ describe("decide", () => {
     const result = decide(noSignals, "block", false);
     expect(result.conclusion).toBe("success");
   });
+
+  it("defaults gateVia to 'none' and 'human-review' when not passed explicitly (off mode, unchanged behavior)", () => {
+    const signals = [...noSignals.filter((s) => s.id !== "risky-file"), signal("risky-file", true)];
+    expect(decide(signals, "block", false).gateVia).toBe("none");
+    expect(decide(signals, "block", true).gateVia).toBe("human-review");
+  });
+
+  it("carries an explicit gateVia and gateDetail through untouched", () => {
+    const signals = [...noSignals.filter((s) => s.id !== "risky-file"), signal("risky-file", true)];
+    const result = decide(signals, "block", true, "self-ack", "Acknowledged by the author");
+    expect(result.conclusion).toBe("success");
+    expect(result.gateVia).toBe("self-ack");
+    expect(result.gateDetail).toBe("Acknowledged by the author");
+  });
 });

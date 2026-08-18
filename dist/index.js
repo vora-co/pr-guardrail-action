@@ -30371,10 +30371,10 @@ function evaluateBlockingRule(signals) {
     }
     return { shouldBlock: blockingSignals.length > 0, blockingSignals };
 }
-function decide(signals, mode, hasHumanApproval) {
+function decide(signals, mode, hasHumanApproval, gateVia = hasHumanApproval ? "human-review" : "none", gateDetail) {
     const { shouldBlock, blockingSignals } = evaluateBlockingRule(signals);
     const conclusion = mode === "block" && shouldBlock && !hasHumanApproval ? "failure" : "success";
-    return { signals, blockingSignals, shouldBlock, hasHumanApproval, conclusion };
+    return { signals, blockingSignals, shouldBlock, hasHumanApproval, gateVia, gateDetail, conclusion };
 }
 
 
@@ -30408,7 +30408,7 @@ function renderSignal(signal, isBlocking) {
     return lines.join("\n");
 }
 function buildComment(decision, mode) {
-    const { signals, blockingSignals, shouldBlock, hasHumanApproval, conclusion } = decision;
+    const { signals, blockingSignals, shouldBlock, hasHumanApproval, gateVia, gateDetail, conclusion } = decision;
     const blockingSet = new Set(blockingSignals);
     const lines = ["## PR Guardrail report", ""];
     for (const signal of signals) {
@@ -30420,6 +30420,14 @@ function buildComment(decision, mode) {
     }
     else if (mode === "warn") {
         lines.push("⚠️ Running in **warn** mode: this PR would be blocked in `block` mode, but the check is reporting success.");
+    }
+    else if (hasHumanApproval && gateVia === "self-ack") {
+        lines.push(`⚠️ Gate satisfied via **self-ack** (solo-maintainer-mode) — not independent human review.` +
+            (gateDetail ? ` ${gateDetail}` : ""));
+    }
+    else if (hasHumanApproval && gateVia === "second-agent") {
+        lines.push(`⚠️ Gate satisfied via **second-agent review** (solo-maintainer-mode) — not independent human review.` +
+            (gateDetail ? ` ${gateDetail}` : ""));
     }
     else if (hasHumanApproval) {
         lines.push("✅ A human reviewer other than the author has approved this PR — the gate is satisfied.");
@@ -30507,12 +30515,28 @@ function loadConfig() {
     const riskyFilePatterns = parseCsv(core.getInput("risky-file-patterns"));
     const volumeThreshold = parsePositiveInt("volume-threshold", core.getInput("volume-threshold") || "300");
     const timeWindowMinutes = parsePositiveInt("time-window", core.getInput("time-window") || "10");
+    const soloMaintainerMode = core.getInput("solo-maintainer-mode") || "off";
+    if (!["off", "self-ack", "second-agent"].includes(soloMaintainerMode)) {
+        throw new Error(`Invalid input "solo-maintainer-mode": expected "off", "self-ack", or "second-agent", ` +
+            `got "${soloMaintainerMode}".`);
+    }
+    const selfAckMinLength = parsePositiveInt("self-ack-min-length", core.getInput("self-ack-min-length") || "20");
+    const selfAckCooldownMinutes = parsePositiveInt("self-ack-cooldown-minutes", core.getInput("self-ack-cooldown-minutes") || "15");
+    const trustedReviewerAgents = parseCsv(core.getInput("trusted-reviewer-agents"));
+    if (soloMaintainerMode === "second-agent" && trustedReviewerAgents.length === 0) {
+        core.warning('solo-maintainer-mode is "second-agent" but "trusted-reviewer-agents" is empty — ' +
+            "the gate can never be satisfied this way until you configure at least one trusted reviewer login.");
+    }
     return {
         botAllowlist,
         riskyFilePatterns,
         volumeThreshold,
         timeWindowMinutes,
         mode,
+        soloMaintainerMode: soloMaintainerMode,
+        selfAckMinLength,
+        selfAckCooldownMinutes,
+        trustedReviewerAgents,
     };
 }
 
@@ -30562,6 +30586,7 @@ exports.CHECK_RUN_NAME = void 0;
 exports.fetchPullFiles = fetchPullFiles;
 exports.fetchPullCommits = fetchPullCommits;
 exports.fetchPullReviews = fetchPullReviews;
+exports.fetchIssueComments = fetchIssueComments;
 exports.createCheckRun = createCheckRun;
 exports.completeCheckRun = completeCheckRun;
 exports.upsertGuardrailComment = upsertGuardrailComment;
@@ -30606,6 +30631,20 @@ async function fetchPullReviews(octokit, repoRef, pullNumber) {
         authorLogin: review.user.login,
         state: review.state,
         submittedAt: review.submitted_at,
+    }));
+}
+async function fetchIssueComments(octokit, repoRef, pullNumber) {
+    const comments = await octokit.paginate(octokit.rest.issues.listComments, {
+        ...repoRef,
+        issue_number: pullNumber,
+        per_page: 100,
+    });
+    return comments
+        .filter((comment) => comment.user)
+        .map((comment) => ({
+        authorLogin: comment.user.login,
+        body: comment.body ?? "",
+        createdAt: comment.created_at,
     }));
 }
 exports.CHECK_RUN_NAME = "vora-guardrail";
@@ -30849,6 +30888,7 @@ const coAuthoredByAgent_1 = __nccwpck_require__(199);
 const riskyFile_1 = __nccwpck_require__(1757);
 const shellCommand_1 = __nccwpck_require__(2974);
 const volumeAnomaly_1 = __nccwpck_require__(8546);
+const soloMaintainer_1 = __nccwpck_require__(6010);
 async function runGuardrail(input) {
     const { octokit, repoRef, pullNumber, headSha, authorLogin, config } = input;
     if ((0, humanGate_1.isAllowlistedBot)(authorLogin, config.botAllowlist)) {
@@ -30872,8 +30912,37 @@ async function runGuardrail(input) {
         (0, shellCommand_1.detectShellCommand)(files),
         (0, volumeAnomaly_1.detectVolumeAnomaly)(files, commits, config.volumeThreshold, config.timeWindowMinutes),
     ];
-    const hasHumanApproval = (0, humanGate_1.hasValidHumanApproval)(authorLogin, reviews);
-    const decision = (0, blocking_1.decide)(signals, config.mode, hasHumanApproval);
+    let hasHumanApproval;
+    let gateVia;
+    let gateDetail;
+    if (config.soloMaintainerMode === "second-agent") {
+        // Second-agent mode REPLACES the native "any non-author approval counts"
+        // check rather than adding to it: that native check would otherwise let
+        // ANY reviewer — allowlisted or not — satisfy the gate, making the
+        // allowlist meaningless and defeating the "not trivially forgeable with
+        // a second bot token" requirement. With this mode on, only an approval
+        // from a login explicitly in trusted-reviewer-agents counts.
+        const result = (0, soloMaintainer_1.evaluateSecondAgent)(authorLogin, reviews, config.trustedReviewerAgents);
+        hasHumanApproval = result.satisfied;
+        gateVia = result.satisfied ? "second-agent" : "none";
+        gateDetail = result.detail;
+    }
+    else {
+        const hasNativeApproval = (0, humanGate_1.hasValidHumanApproval)(authorLogin, reviews);
+        hasHumanApproval = hasNativeApproval;
+        gateVia = hasNativeApproval ? "human-review" : "none";
+        if (!hasHumanApproval && config.soloMaintainerMode === "self-ack") {
+            const comments = await (0, github_1.fetchIssueComments)(octokit, repoRef, pullNumber);
+            const lastPushAt = commits.reduce((latest, commit) => (commit.authorDate > latest ? commit.authorDate : latest), commits[0].authorDate);
+            const result = (0, soloMaintainer_1.evaluateSelfAck)(authorLogin, comments, lastPushAt, config.selfAckMinLength, config.selfAckCooldownMinutes);
+            if (result.satisfied) {
+                hasHumanApproval = true;
+                gateVia = "self-ack";
+                gateDetail = result.detail;
+            }
+        }
+    }
+    const decision = (0, blocking_1.decide)(signals, config.mode, hasHumanApproval, gateVia, gateDetail);
     const comment = (0, comment_1.buildComment)(decision, config.mode);
     try {
         await (0, github_1.upsertGuardrailComment)(octokit, repoRef, pullNumber, comment);
@@ -31088,6 +31157,81 @@ function detectVolumeAnomaly(files, commits, volumeThreshold, timeWindowMinutes)
         ]
         : [];
     return { id: "volume-anomaly", detected, details };
+}
+
+
+/***/ }),
+
+/***/ 6010:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.evaluateSelfAck = evaluateSelfAck;
+exports.evaluateSecondAgent = evaluateSecondAgent;
+const ACK_PATTERN = /^\/guardrail-ack:\s*(.+?)\s*$/im;
+/**
+ * self-ack lets the PR author satisfy the human gate without a second
+ * reviewer, but only through a deliberate `/guardrail-ack: <reason>` comment
+ * — never through GitHub's native "Approve" (already excluded for the
+ * author elsewhere) — and only once a cooldown has passed since their last
+ * push, so the ack can't be indistinguishable from a reflexive click on the
+ * same push that introduced the risk.
+ */
+function evaluateSelfAck(authorLogin, comments, lastPushAt, minLength, cooldownMinutes) {
+    const lastPushTime = new Date(lastPushAt).getTime();
+    const cooldownMs = cooldownMinutes * 60_000;
+    const rejectedAttempts = [];
+    const candidates = comments
+        .filter((comment) => comment.authorLogin === authorLogin)
+        .map((comment) => ({ comment, match: comment.body.match(ACK_PATTERN) }))
+        .filter((entry) => entry.match !== null)
+        .sort((a, b) => new Date(a.comment.createdAt).getTime() - new Date(b.comment.createdAt).getTime());
+    for (const { comment, match } of candidates) {
+        const justification = match[1].trim();
+        const commentTime = new Date(comment.createdAt).getTime();
+        if (justification.length < minLength) {
+            rejectedAttempts.push({ createdAt: comment.createdAt, reason: "too-short" });
+            continue;
+        }
+        if (commentTime - lastPushTime < cooldownMs) {
+            rejectedAttempts.push({ createdAt: comment.createdAt, reason: "too-early" });
+            continue;
+        }
+        return {
+            satisfied: true,
+            detail: `Acknowledged by the author on ${comment.createdAt}: "${justification}"`,
+            rejectedAttempts,
+        };
+    }
+    return { satisfied: false, rejectedAttempts };
+}
+/**
+ * second-agent is satisfied by an APPROVED review from a login explicitly
+ * configured in `trustedReviewerAgents` — never autodetected or trusted by
+ * default, so a second token for the same bot can't trivially forge this.
+ * An empty allowlist means the mode can never be satisfied, by design.
+ */
+function evaluateSecondAgent(authorLogin, reviews, trustedReviewerAgents) {
+    if (trustedReviewerAgents.length === 0) {
+        return { satisfied: false };
+    }
+    const latestByReviewer = new Map();
+    for (const review of reviews) {
+        if (review.authorLogin === authorLogin)
+            continue;
+        if (!trustedReviewerAgents.includes(review.authorLogin))
+            continue;
+        const current = latestByReviewer.get(review.authorLogin);
+        if (!current || new Date(review.submittedAt) >= new Date(current.submittedAt)) {
+            latestByReviewer.set(review.authorLogin, review);
+        }
+    }
+    const approving = Array.from(latestByReviewer.entries()).find(([, review]) => review.state === "APPROVED");
+    if (!approving)
+        return { satisfied: false };
+    return { satisfied: true, detail: `Approved by trusted reviewer agent "${approving[0]}".` };
 }
 
 

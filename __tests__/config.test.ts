@@ -7,6 +7,10 @@ function setInputs(inputs: Record<string, string>): void {
     "volume-threshold",
     "time-window",
     "mode",
+    "solo-maintainer-mode",
+    "self-ack-min-length",
+    "self-ack-cooldown-minutes",
+    "trusted-reviewer-agents",
   ]) {
     delete process.env[`INPUT_${key.toUpperCase()}`];
   }
@@ -30,6 +34,10 @@ describe("loadConfig", () => {
       ])
     );
     expect(config.riskyFilePatterns).toEqual([]);
+    expect(config.soloMaintainerMode).toBe("off");
+    expect(config.selfAckMinLength).toBe(20);
+    expect(config.selfAckCooldownMinutes).toBe(15);
+    expect(config.trustedReviewerAgents).toEqual([]);
   });
 
   it("merges custom bot-allowlist with the built-in defaults", () => {
@@ -60,5 +68,33 @@ describe("loadConfig", () => {
   it("rejects a non-numeric time-window", () => {
     setInputs({ "time-window": "soon" });
     expect(() => loadConfig()).toThrow(/time-window/i);
+  });
+
+  it("rejects an invalid solo-maintainer-mode", () => {
+    setInputs({ "solo-maintainer-mode": "yolo" });
+    expect(() => loadConfig()).toThrow(/solo-maintainer-mode/i);
+  });
+
+  it("accepts self-ack and second-agent as valid solo-maintainer-mode values", () => {
+    setInputs({ "solo-maintainer-mode": "self-ack" });
+    expect(loadConfig().soloMaintainerMode).toBe("self-ack");
+
+    setInputs({ "solo-maintainer-mode": "second-agent" });
+    expect(loadConfig().soloMaintainerMode).toBe("second-agent");
+  });
+
+  it("rejects a zero or negative self-ack-min-length", () => {
+    setInputs({ "self-ack-min-length": "0" });
+    expect(() => loadConfig()).toThrow(/self-ack-min-length/i);
+  });
+
+  it("rejects a zero or negative self-ack-cooldown-minutes", () => {
+    setInputs({ "self-ack-cooldown-minutes": "-1" });
+    expect(() => loadConfig()).toThrow(/self-ack-cooldown-minutes/i);
+  });
+
+  it("parses trusted-reviewer-agents as a comma-separated list", () => {
+    setInputs({ "trusted-reviewer-agents": "review-bot-a, review-bot-b" });
+    expect(loadConfig().trustedReviewerAgents).toEqual(["review-bot-a", "review-bot-b"]);
   });
 });

@@ -26,7 +26,8 @@ function renderSignal(signal: SignalResult, isBlocking: boolean): string {
 }
 
 export function buildComment(decision: GuardrailDecision, mode: Mode): string {
-  const { signals, blockingSignals, shouldBlock, hasHumanApproval, conclusion } = decision;
+  const { signals, blockingSignals, shouldBlock, hasHumanApproval, gateVia, gateDetail, conclusion } =
+    decision;
   const blockingSet = new Set(blockingSignals);
 
   const lines: string[] = ["## PR Guardrail report", ""];
@@ -42,6 +43,16 @@ export function buildComment(decision: GuardrailDecision, mode: Mode): string {
   } else if (mode === "warn") {
     lines.push(
       "⚠️ Running in **warn** mode: this PR would be blocked in `block` mode, but the check is reporting success."
+    );
+  } else if (hasHumanApproval && gateVia === "self-ack") {
+    lines.push(
+      `⚠️ Gate satisfied via **self-ack** (solo-maintainer-mode) — not independent human review.` +
+        (gateDetail ? ` ${gateDetail}` : "")
+    );
+  } else if (hasHumanApproval && gateVia === "second-agent") {
+    lines.push(
+      `⚠️ Gate satisfied via **second-agent review** (solo-maintainer-mode) — not independent human review.` +
+        (gateDetail ? ` ${gateDetail}` : "")
     );
   } else if (hasHumanApproval) {
     lines.push(

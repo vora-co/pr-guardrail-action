@@ -1,6 +1,9 @@
 import { Mode } from "./config";
 import { SignalId, SignalResult } from "./types";
 
+/** How the human gate ended up satisfied — carried through purely for reporting. */
+export type GateVia = "human-review" | "self-ack" | "second-agent" | "none";
+
 export interface GuardrailDecision {
   signals: SignalResult[];
   /** Signals that actually contributed to the blocking verdict. */
@@ -9,6 +12,9 @@ export interface GuardrailDecision {
   shouldBlock: boolean;
   /** Whether a human other than the author has approved the PR. */
   hasHumanApproval: boolean;
+  /** Which mechanism satisfied the gate — never asserted as independent human review unless it is one. */
+  gateVia: GateVia;
+  gateDetail?: string;
   /** Final check run conclusion after applying `mode` and human approval. */
   conclusion: "success" | "failure";
 }
@@ -48,11 +54,13 @@ export function evaluateBlockingRule(signals: SignalResult[]): {
 export function decide(
   signals: SignalResult[],
   mode: Mode,
-  hasHumanApproval: boolean
+  hasHumanApproval: boolean,
+  gateVia: GateVia = hasHumanApproval ? "human-review" : "none",
+  gateDetail?: string
 ): GuardrailDecision {
   const { shouldBlock, blockingSignals } = evaluateBlockingRule(signals);
   const conclusion: "success" | "failure" =
     mode === "block" && shouldBlock && !hasHumanApproval ? "failure" : "success";
 
-  return { signals, blockingSignals, shouldBlock, hasHumanApproval, conclusion };
+  return { signals, blockingSignals, shouldBlock, hasHumanApproval, gateVia, gateDetail, conclusion };
 }

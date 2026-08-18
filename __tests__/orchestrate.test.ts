@@ -8,6 +8,10 @@ function baseConfig(overrides: Partial<GuardrailConfig> = {}): GuardrailConfig {
     volumeThreshold: 300,
     timeWindowMinutes: 10,
     mode: "block",
+    soloMaintainerMode: "off",
+    selfAckMinLength: 20,
+    selfAckCooldownMinutes: 15,
+    trustedReviewerAgents: [],
     ...overrides,
   };
 }
@@ -162,6 +166,132 @@ describe("runGuardrail", () => {
     });
     expect(result.outcome).toBe("evaluated");
     expect(checksUpdate).not.toHaveBeenCalled();
+  });
+
+  it("off mode ignores a /guardrail-ack comment entirely (unchanged behavior)", async () => {
+    const { octokit } = makeOctokit({
+      files: [{ filename: "infra/main.tf", status: "added", additions: 5, deletions: 0, changes: 5 }],
+      commits: [{ sha: "a", commit: { message: "add tf", author: { date: "2026-08-11T10:00:00Z" } } }],
+      reviews: [],
+      comments: [
+        {
+          user: { login: "alice" },
+          body: "/guardrail-ack: reviewed this migration myself, it's a safe backfill",
+          created_at: "2026-08-11T10:30:00Z",
+        },
+      ],
+    });
+    const result = await runGuardrail({
+      octokit,
+      repoRef,
+      pullNumber: 1,
+      headSha: "sha",
+      authorLogin: "alice",
+      config: baseConfig({ soloMaintainerMode: "off" }),
+    });
+    expect(result.outcome).toBe("evaluated");
+    if (result.outcome === "evaluated") {
+      expect(result.decision.conclusion).toBe("failure");
+      expect(result.decision.gateVia).toBe("none");
+    }
+  });
+
+  it("self-ack mode satisfies the gate with a valid ack comment from the author", async () => {
+    const { octokit } = makeOctokit({
+      files: [{ filename: "infra/main.tf", status: "added", additions: 5, deletions: 0, changes: 5 }],
+      commits: [{ sha: "a", commit: { message: "add tf", author: { date: "2026-08-11T10:00:00Z" } } }],
+      reviews: [],
+      comments: [
+        {
+          user: { login: "alice" },
+          body: "/guardrail-ack: reviewed this migration myself, it's a safe backfill",
+          created_at: "2026-08-11T10:30:00Z",
+        },
+      ],
+    });
+    const result = await runGuardrail({
+      octokit,
+      repoRef,
+      pullNumber: 1,
+      headSha: "sha",
+      authorLogin: "alice",
+      config: baseConfig({ soloMaintainerMode: "self-ack" }),
+    });
+    expect(result.outcome).toBe("evaluated");
+    if (result.outcome === "evaluated") {
+      expect(result.decision.conclusion).toBe("success");
+      expect(result.decision.gateVia).toBe("self-ack");
+    }
+  });
+
+  it("self-ack mode still blocks when the ack is posted before the cooldown elapses", async () => {
+    const { octokit } = makeOctokit({
+      files: [{ filename: "infra/main.tf", status: "added", additions: 5, deletions: 0, changes: 5 }],
+      commits: [{ sha: "a", commit: { message: "add tf", author: { date: "2026-08-11T10:00:00Z" } } }],
+      reviews: [],
+      comments: [
+        {
+          user: { login: "alice" },
+          body: "/guardrail-ack: reviewed this migration myself, it's a safe backfill",
+          created_at: "2026-08-11T10:01:00Z",
+        },
+      ],
+    });
+    const result = await runGuardrail({
+      octokit,
+      repoRef,
+      pullNumber: 1,
+      headSha: "sha",
+      authorLogin: "alice",
+      config: baseConfig({ soloMaintainerMode: "self-ack" }),
+    });
+    expect(result.outcome).toBe("evaluated");
+    if (result.outcome === "evaluated") {
+      expect(result.decision.conclusion).toBe("failure");
+      expect(result.decision.gateVia).toBe("none");
+    }
+  });
+
+  it("second-agent mode satisfies the gate via an approval from a trusted reviewer login", async () => {
+    const { octokit } = makeOctokit({
+      files: [{ filename: "infra/main.tf", status: "added", additions: 5, deletions: 0, changes: 5 }],
+      commits: [{ sha: "a", commit: { message: "add tf", author: { date: "2026-08-11T10:00:00Z" } } }],
+      reviews: [{ user: { login: "review-bot" }, state: "APPROVED", submitted_at: "2026-08-11T11:00:00Z" }],
+    });
+    const result = await runGuardrail({
+      octokit,
+      repoRef,
+      pullNumber: 1,
+      headSha: "sha",
+      authorLogin: "alice",
+      config: baseConfig({ soloMaintainerMode: "second-agent", trustedReviewerAgents: ["review-bot"] }),
+    });
+    expect(result.outcome).toBe("evaluated");
+    if (result.outcome === "evaluated") {
+      expect(result.decision.conclusion).toBe("success");
+      expect(result.decision.gateVia).toBe("second-agent");
+    }
+  });
+
+  it("second-agent mode never trusts an approval when trusted-reviewer-agents is empty", async () => {
+    const { octokit } = makeOctokit({
+      files: [{ filename: "infra/main.tf", status: "added", additions: 5, deletions: 0, changes: 5 }],
+      commits: [{ sha: "a", commit: { message: "add tf", author: { date: "2026-08-11T10:00:00Z" } } }],
+      reviews: [{ user: { login: "review-bot" }, state: "APPROVED", submitted_at: "2026-08-11T11:00:00Z" }],
+    });
+    const result = await runGuardrail({
+      octokit,
+      repoRef,
+      pullNumber: 1,
+      headSha: "sha",
+      authorLogin: "alice",
+      config: baseConfig({ soloMaintainerMode: "second-agent", trustedReviewerAgents: [] }),
+    });
+    expect(result.outcome).toBe("evaluated");
+    if (result.outcome === "evaluated") {
+      expect(result.decision.conclusion).toBe("failure");
+      expect(result.decision.gateVia).toBe("none");
+    }
   });
 
   it("succeeds when a blocking signal fires but a non-author reviewer approved", async () => {

@@ -38,6 +38,20 @@ The reasoning: the mere presence of an AI co-author is not, by itself, risk — 
 - If an approval is later revoked (`Request changes` or a dismissed review), the check goes back to `failure`.
 - Authors on the `bot-allowlist` (e.g. `dependabot[bot]`, `renovate[bot]`, `github-actions[bot]` by default) skip analysis entirely.
 
+### Solo-maintainer mode
+
+The rules above assume a second human is available to review. If you're a solo maintainer or a 2-3 person team, that's not always true — and if your repo is private on GitHub Free, you also can't enable a required status check at all (see [Does this actually block anything?](#does-this-actually-block-anything) below). `solo-maintainer-mode` is opt-in and **off by default**; turning it on trades some rigor for something that's actually usable when there's no second reviewer.
+
+| `solo-maintainer-mode` | Behavior |
+|---|---|
+| `off` (default) | Unchanged — a human other than the author must approve via GitHub's native review. |
+| `self-ack` | The author can satisfy the gate by commenting `/guardrail-ack: <reason>` — **not** by clicking GitHub's native "Approve" (that's still ignored for the author). The justification must be at least `self-ack-min-length` characters and posted at least `self-ack-cooldown-minutes` after the PR's last commit, so it can't be a reflexive click on the same push that introduced the risk. |
+| `second-agent` | **Replaces** the normal "any non-author approval counts" check with a stricter one: only an approving review from a login explicitly listed in `trusted-reviewer-agents` satisfies the gate. This is meant for a second review agent running under its own GitHub identity, distinct from whatever generated the change. The allowlist is never autodetected — you must configure it — so it can't be trivially forged with a second token for the same bot. Because it's a full replacement, an approval from anyone *not* on the list no longer counts while this mode is on. |
+
+Whichever mode satisfies the gate, the check summary and PR comment say so explicitly — a self-ack or second-agent approval is never presented as if it were independent human review:
+
+> ⚠️ Gate satisfied via **self-ack** (solo-maintainer-mode) — not independent human review.
+
 ## Installation
 
 ```yaml
@@ -77,6 +91,10 @@ All inputs are optional with reasonable defaults.
 | `risky-file-patterns` | `""` | Comma-separated extra glob patterns treated as high-risk, appended to the built-in list. |
 | `volume-threshold` | `300` | Max lines changed within `time-window` before `volume-anomaly` fires. Must be a positive integer. |
 | `time-window` | `10` | Time window in minutes used to evaluate commit velocity. Must be a positive integer. |
+| `solo-maintainer-mode` | `off` | `off`, `self-ack`, or `second-agent` — see [Solo-maintainer mode](#solo-maintainer-mode) above. |
+| `self-ack-min-length` | `20` | Minimum character length of the justification in a `/guardrail-ack: <reason>` comment. Only relevant in `self-ack` mode. |
+| `self-ack-cooldown-minutes` | `15` | Minimum minutes between the PR's last commit and a valid ack. Only relevant in `self-ack` mode. |
+| `trusted-reviewer-agents` | `""` | Comma-separated logins trusted as a second reviewing agent. Never autodetected. Only relevant in `second-agent` mode. |
 | `github-token` | `${{ github.token }}` | Token used to read PR data and post the check/comment. You shouldn't need to set this. |
 
 Try it in `warn` mode first:

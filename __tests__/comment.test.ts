@@ -43,6 +43,24 @@ describe("buildComment", () => {
     expect(comment).not.toContain("🔒");
   });
 
+  it("labels a self-ack gate explicitly as not independent human review", () => {
+    const signals = [...clean.filter((s) => s.id !== "risky-file"), signal("risky-file", true)];
+    const decision = decide(signals, "block", true, "self-ack", "Acknowledged by the author on X");
+    const comment = buildComment(decision, "block");
+    expect(comment).toContain("self-ack");
+    expect(comment).toContain("not independent human review");
+    expect(comment).toContain("Acknowledged by the author on X");
+  });
+
+  it("labels a second-agent gate explicitly as not independent human review", () => {
+    const signals = [...clean.filter((s) => s.id !== "risky-file"), signal("risky-file", true)];
+    const decision = decide(signals, "block", true, "second-agent", 'Approved by trusted reviewer agent "review-bot".');
+    const comment = buildComment(decision, "block");
+    expect(comment).toContain("second-agent");
+    expect(comment).toContain("not independent human review");
+    expect(comment).toContain("review-bot");
+  });
+
   it("marks co-authored-by-agent as informational, not blocking, even when detected", () => {
     const signals = [
       signal("co-authored-by-agent", true, ["abc123: Co-authored-by: Claude <noreply@anthropic.com>"]),
