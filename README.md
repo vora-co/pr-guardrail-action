@@ -140,3 +140,10 @@ Not built in v1 (by design, not an oversight): GitHub Marketplace publishing, Gi
 ## License
 
 [MIT](LICENSE)
+
+---
+
+Built by [Vora](https://vora.software) — a software development company focused on automated, AI-native delivery.
+
+- ✉ [felipe.mejia@vora.software](mailto:felipe.mejia@vora.software)
+- 🌐 [vora.software](https://vora.software)
